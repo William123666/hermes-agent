@@ -20,6 +20,10 @@ export interface ChangedFile {
   removed: number
 }
 
+export interface RecordedChangedFile extends ChangedFile {
+  diffs: string[]
+}
+
 interface ChangedFilePart {
   toolResultMetadata?: ToolResultMetadata
   args?: unknown
@@ -34,7 +38,11 @@ interface ChangedFilePart {
  * still running has no result, and a failed one changed nothing.
  */
 export function deriveChangedFiles(parts: readonly unknown[]): ChangedFile[] {
-  const byPath = new Map<string, ChangedFile>()
+  return deriveRecordedChanges(parts).map(({ diffs: _diffs, ...file }) => file)
+}
+
+export function deriveRecordedChanges(parts: readonly unknown[]): RecordedChangedFile[] {
+  const byPath = new Map<string, RecordedChangedFile>()
 
   for (const raw of parts) {
     const part = (raw ?? {}) as ChangedFilePart
@@ -62,8 +70,15 @@ export function deriveChangedFiles(parts: readonly unknown[]): ChangedFile[] {
     if (existing) {
       existing.added += stats.added
       existing.removed += stats.removed
+      existing.diffs.push(diff)
     } else {
-      byPath.set(path, { added: stats.added, name: fileEditBasename(path), path, removed: stats.removed })
+      byPath.set(path, {
+        added: stats.added,
+        name: fileEditBasename(path),
+        path,
+        removed: stats.removed,
+        diffs: [diff]
+      })
     }
   }
 

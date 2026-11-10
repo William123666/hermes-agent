@@ -146,6 +146,13 @@ def _store_python(runtime: Path) -> Path | None:
         if entry:
             candidate = runtime / entry / rel
             if candidate.is_file():
+                # Herdr identifies pane agents by their argv[0] basename. A
+                # same-inode "hermes" alias keeps that identity across the
+                # runtime relaunch, which otherwise re-execs as bin/python3.
+                if not _is_windows():
+                    alias = candidate.with_name("hermes")
+                    if alias.is_file():
+                        return alias
                 return candidate
 
     return None

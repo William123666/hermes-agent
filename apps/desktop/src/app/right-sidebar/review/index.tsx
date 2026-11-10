@@ -33,11 +33,13 @@ import {
   toggleReviewTreeMode,
   unstageReviewFile
 } from '@/store/review'
+import { $reviewRecordedChanges } from '@/store/review'
 
 import { SidebarPanelLabel } from '../../shell/sidebar-label'
 import { PaneEmptyState, RightSidebarSectionHeader } from '../index'
 
 import { ReviewFileTree } from './file-tree'
+import { RecordedReviewPane } from './recorded-review'
 import { ReviewScopeRow } from './scope-row'
 import { ReviewShipBar } from './ship-bar'
 
@@ -46,6 +48,12 @@ import { ReviewShipBar } from './ship-bar'
 const ACTION_BTN = 'size-5'
 
 export function ReviewPane() {
+  const recorded = useStore($reviewRecordedChanges)
+
+  return recorded.length ? <RecordedReviewPane files={recorded} /> : <GitReviewPane />
+}
+
+function GitReviewPane() {
   const { t } = useI18n()
   const c = t.statusStack.coding
   const panesFlipped = useStore($panesFlipped)
