@@ -649,25 +649,45 @@ def _display_diff_path(path: Path) -> str:
 
 
 def _resolve_skill_manage_paths(args: dict) -> list[Path]:
-    """Resolve skill_manage write targets to filesystem paths."""
-    action = args.get("action")
-    name = args.get("name")
-    if not action or not name:
-        return []
-    from tools.skill_manager_tool import _find_skill, _resolve_skill_dir
+    """Resolve skill writes before execution, including create + supporting-file batches."""
+    from tools.skill_manager_tool import (
+        _find_skill, _resolve_skill_dir, _resolve_supporting_file, _validate_category, _validate_name,
+    )
 
-    if action == "create":
-        return [_resolve_skill_dir(name, args.get("category")) / "SKILL.md"]
-    existing = _find_skill(name)
-    if not existing:
-        return []
-    skill_dir = Path(existing["path"])
-    file_path = args.get("file_path")
-    if action == "delete":
-        return [path for path in sorted(skill_dir.rglob("*")) if path.is_file()]
-    if file_path and action in {"edit", "patch", "write_file", "remove_file"}:
-        return [skill_dir / file_path]
-    return [skill_dir / "SKILL.md"] if action in {"edit", "patch"} else []
+    operations = args.get("operations")
+    if not isinstance(operations, list):
+        operations = [args]
+    created: dict[str, Path] = {}
+    paths: list[Path] = []
+    for op in operations:
+        if not isinstance(op, dict):
+            continue
+        action, name = op.get("action"), op.get("name") or args.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        if action == "create":
+            category = op.get("category")
+            if _validate_name(name) or _validate_category(category):
+                continue
+            skill_dir = _resolve_skill_dir(name, category)
+            created[name] = skill_dir
+            paths.append(skill_dir / "SKILL.md")
+            continue
+        existing = _find_skill(name) if name not in created else None
+        skill_dir = created.get(name) or (Path(existing["path"]) if existing else None)
+        if skill_dir is None:
+            continue
+        if action == "delete":
+            paths.extend(path for path in sorted(skill_dir.rglob("*")) if path.is_file())
+        elif action in {"edit", "patch", "write_file", "remove_file"}:
+            # A full-rewrite patch ignores file_path in the real tool too.
+            file_path = "SKILL.md" if action == "edit" or (action == "patch" and op.get("content")) else op.get("file_path") or "SKILL.md"
+            if not isinstance(file_path, str):
+                continue
+            target, error = _resolve_supporting_file(skill_dir, file_path)
+            if error is None and target is not None:
+                paths.append(target)
+    return list(dict.fromkeys(paths))
 
 
 def _resolve_local_edit_paths(tool_name: str, function_args: dict | None, task_id: str | None = None) -> list[Path]:
@@ -716,10 +736,13 @@ def _diff_from_snapshot(snapshot: LocalEditSnapshot | None) -> str | None:
         if before == after:
             continue
         display_path = _display_diff_path(path)
-        diff = "".join(unified_diff(
-            (before or "").splitlines(keepends=True), (after or "").splitlines(keepends=True),
-            fromfile=f"a/{display_path}", tofile=f"b/{display_path}",
-        ))
+        diff = "".join(
+            line if line.endswith("\n") else line + "\n\\ No newline at end of file\n"
+            for line in unified_diff(
+                (before or "").splitlines(keepends=True), (after or "").splitlines(keepends=True),
+                fromfile=f"a/{display_path}", tofile=f"b/{display_path}",
+            )
+        )
         if diff:
             chunks.append(diff if diff.endswith("\n") else diff + "\n")
     return "".join(chunks) or None
@@ -816,6 +839,19 @@ def _summarize_rendered_diff_sections(
             summary += t("display.diff.omitted_files", count=omitted_files)
         rendered.append(f"{_diff_ansi()['hunk']}{summary}{_ANSI_RESET}")
     return rendered
+
+
+def edit_diff_preview(
+    tool_name: str, result: str | None, *,
+    function_args: dict | None = None, snapshot: LocalEditSnapshot | None = None,
+) -> str | None:
+    """Skill cards need all file headers and hunks, not the CLI's capped ANSI preview."""
+    if tool_name == "skill_manage":
+        return extract_edit_diff(tool_name, result, function_args=function_args, snapshot=snapshot)
+    rendered: list[str] = []
+    render_edit_diff_with_delta(tool_name, result, function_args=function_args,
+                                snapshot=snapshot, print_fn=rendered.append)
+    return "\n".join(rendered) or None
 
 
 def render_edit_diff_with_delta(

@@ -215,15 +215,14 @@ def complete_fields(turn, call_id, tool_name=None, args=None, result=None, *, is
     if tool_name is None:
         return fields
     snapshot = turn.__dict__.setdefault("_local_edit_snapshots", {}).pop(key, None)
-    rendered: list[str] = []
+    diff = None
     try:
-        from agent.display import render_edit_diff_with_delta
-        render_edit_diff_with_delta(tool_name, result, function_args=args if isinstance(args, dict) else {},
-                                    snapshot=snapshot, print_fn=rendered.append)
+        from agent.display import edit_diff_preview
+        diff = edit_diff_preview(tool_name, result, function_args=args if isinstance(args, dict) else {},
+                                 snapshot=snapshot)
     except Exception:  # health: allow BLE001 -- display-only preview, as main's CLI _on_tool_complete
         logger.debug("Edit diff preview failed for %s", tool_name, exc_info=True)
-        rendered = []
-    fields["inline_diff"] = "\n".join(rendered) if rendered else None
+    fields["inline_diff"] = diff
     from agent.terminal_image import tool_image_path
     fields["image_path"] = tool_image_path(tool_name, args, result, is_error=is_error)
     todo = todo_state(tool_name, result)

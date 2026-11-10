@@ -11,6 +11,8 @@ import {
 } from '@/components/assistant-ui/tool/fallback-model'
 import { type ToolResultMetadata, toolResultRecord } from '@/lib/tool-result-metadata'
 
+import { recordedSkillChanges } from './skill-changes'
+
 export interface ChangedFile {
   added: number
   /** Basename, for the row label. */
@@ -47,38 +49,38 @@ export function deriveRecordedChanges(parts: readonly unknown[]): RecordedChange
   for (const raw of parts) {
     const part = (raw ?? {}) as ChangedFilePart
 
-    if (part.type !== 'tool-call' || typeof part.toolName !== 'string' || !isFileEditTool(part.toolName)) {
+    if (part.type !== 'tool-call' || typeof part.toolName !== 'string') {
       continue
     }
 
     const result = toolResultRecord(part)
     const diff = inlineDiffFromResult(result)
 
-    if (!diff) {
+    if (!diff || result.success === false || result.error) {
       continue
     }
 
-    const path = fileEditPath(parseMaybeObject(part.args), result)
+    let changes: RecordedChangedFile[]
 
-    if (!path) {
-      continue
-    }
-
-    const stats = countDiffLineStats(diff)
-    const existing = byPath.get(path)
-
-    if (existing) {
-      existing.added += stats.added
-      existing.removed += stats.removed
-      existing.diffs.push(diff)
+    if (part.toolName === 'skill_manage') {
+      changes = recordedSkillChanges(diff, parseMaybeObject(part.args))
+    } else if (isFileEditTool(part.toolName)) {
+      const path = fileEditPath(parseMaybeObject(part.args), result)
+      changes = path ? [{ ...countDiffLineStats(diff), name: fileEditBasename(path), path, diffs: [diff] }] : []
     } else {
-      byPath.set(path, {
-        added: stats.added,
-        name: fileEditBasename(path),
-        path,
-        removed: stats.removed,
-        diffs: [diff]
-      })
+      continue
+    }
+
+    for (const file of changes) {
+      const existing = byPath.get(file.path)
+
+      if (existing) {
+        existing.added += file.added
+        existing.removed += file.removed
+        existing.diffs.push(...file.diffs)
+      } else {
+        byPath.set(file.path, file)
+      }
     }
   }
 
