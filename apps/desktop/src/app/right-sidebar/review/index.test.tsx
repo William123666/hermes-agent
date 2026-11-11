@@ -10,8 +10,10 @@ import {
   $reviewFiles,
   $reviewIsRepo,
   $reviewLoading,
+  $reviewRecordedChanges,
   $reviewScope,
-  $reviewSelectedPath
+  $reviewSelectedPath,
+  openRecordedReview
 } from '@/store/review'
 
 import { ReviewPane } from './index'
@@ -35,6 +37,7 @@ function renderPane() {
 
 describe('ReviewPane header gating', () => {
   beforeEach(() => {
+    $reviewRecordedChanges.set([])
     $panesFlipped.set(false)
     $reviewFiles.set([file('a.ts')])
     $reviewIsRepo.set(true)
@@ -47,8 +50,31 @@ describe('ReviewPane header gating', () => {
 
   afterEach(() => {
     cleanup()
+    $reviewRecordedChanges.set([])
     $reviewFiles.set([])
     $reviewScope.set('uncommitted')
+  })
+
+  it('shows recorded config edits outside Git and returns to the working tree explicitly', () => {
+    $reviewFiles.set([])
+    $reviewIsRepo.set(false)
+    openRecordedReview([
+      {
+        path: '/Users/test/.hermes/SOUL.md',
+        name: 'SOUL.md',
+        added: 1,
+        removed: 1,
+        diffs: ['--- a/SOUL.md\n+++ b/SOUL.md\n@@ -1 +1 @@\n-before review\n+after review']
+      }
+    ])
+    renderPane()
+
+    expect(screen.getByText('~/.hermes/SOUL.md')).toBeTruthy()
+    expect(screen.getByText('after review')).toBeTruthy()
+    expect(screen.queryByLabelText('Stage all')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Uncommitted' }))
+    expect($reviewRecordedChanges.get()).toEqual([])
+    expect($reviewScope.get()).toBe('uncommitted')
   })
 
   it('enables stage-all / revert-all under the uncommitted scope', () => {

@@ -1,6 +1,7 @@
 import { atom, computed } from 'nanostores'
 
 import { SIDEBAR_COLLAPSE_MEDIA_QUERY } from '@/app/layout-constants'
+import type { RecordedChangedFile } from '@/components/assistant-ui/thread/changed-files'
 import { PANE_TOGGLE_REVEAL_EVENT } from '@/components/pane-shell'
 import { isPaneVisible, revealTreePane } from '@/components/pane-shell/tree/store'
 import type { HermesReviewFile, HermesReviewScope, HermesReviewShipInfo } from '@/global'
@@ -117,6 +118,9 @@ function recordTurnBase(cwd: string, sha: string): void {
   rest.push([cwd, sha])
   $reviewTurnBase.set(Object.fromEntries(rest))
 }
+
+// Tool-recorded edits also cover files outside Git and historical turns.
+export const $reviewRecordedChanges = atom<RecordedChangedFile[]>([])
 
 export const $reviewFiles = atom<HermesReviewFile[]>([])
 export const $reviewLoading = atom(false)
@@ -373,6 +377,7 @@ function refreshShipInfoIfStale(): void {
  *  session's cwd when null — see `$reviewScopeCwd`. Keep the originating
  *  composer target alongside it for agent-ship actions. */
 export function openReview(scopeCwd: null | string = null, scopeTarget = 'main'): void {
+  $reviewRecordedChanges.set([])
   $reviewScopeCwd.set(scopeCwd?.trim() || null)
   $reviewScopeTarget.set(scopeTarget.trim() || 'main')
   $reviewOpen.set(true)
@@ -382,6 +387,7 @@ export function openReview(scopeCwd: null | string = null, scopeTarget = 'main')
 }
 
 export function closeReview(): void {
+  $reviewRecordedChanges.set([])
   noteAreaClosed('review_pane')
   $reviewOpen.set(false)
   $reviewScopeCwd.set(null)
@@ -450,6 +456,16 @@ export function revealReview(scopeCwd: null | string = null, scopeTarget = 'main
   }
 
   revealTreePane(REVIEW_PANE_ID)
+}
+
+/** Review the exact edits attached to a transcript card, independent of Git state. */
+export function openRecordedReview(
+  files: RecordedChangedFile[],
+  scopeCwd: null | string = null,
+  scopeTarget = 'main'
+): void {
+  revealReview(scopeCwd, scopeTarget)
+  $reviewRecordedChanges.set(files)
 }
 
 /** The changed file matching a tool-reported path (absolute or repo-relative). */

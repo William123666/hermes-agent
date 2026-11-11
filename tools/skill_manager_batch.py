@@ -3,6 +3,7 @@
 through ``tools.skill_manager_tool`` so that module owns it."""
 
 from contextlib import suppress
+from difflib import unified_diff
 import json
 import logging
 import posixpath
@@ -216,6 +217,75 @@ def _rollback(snapshots, find_skill, results):
 _ADVISORY_KEYS = ("lint_warnings", "lint_hint")
 
 
+def _display_diff_path(path: Path) -> str:
+    """Prefer cwd-relative paths, matching the display layer's labels."""
+    try:
+        return str(path.resolve().relative_to(Path.cwd().resolve()))
+    except Exception:
+        return str(path)
+
+
+def _read_diff_text(path: Path) -> str | None:
+    """Return UTF-8 text or None for a missing/binary/unreadable file."""
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    try:
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return None
+
+
+def _diff_one(before: str | None, after: str | None, path: Path) -> str:
+    if before == after:
+        return ""
+    display = _display_diff_path(path)
+    diff = "".join(
+        line if line.endswith("\n") else line + "\n\\ No newline at end of file\n"
+        for line in unified_diff(
+            (before or "").splitlines(keepends=True), (after or "").splitlines(keepends=True),
+            fromfile=f"a/{display}", tofile=f"b/{display}",
+        )
+    )
+    return diff if diff.endswith("\n") else diff + "\n"
+
+
+def _skill_batch_diff(snapshots, find_skill) -> str | None:
+    """Build one unified diff from the pre-batch snapshots to the landed skill dirs.
+
+    The result must be derived from disk state, not requested ops: a no-op patch or
+    a rolled-back batch naturally yields no diff. Only text files are compared.
+    """
+    chunks: list[str] = []
+    for nm, (pre_dir, snap, _dir_pre_existed) in snapshots.items():
+        post = find_skill(nm)
+        post_dir = Path(post["path"]) if post else None
+        # ``pre_dir`` is the live skill directory, already mutated by the batch.
+        # The copied ``snap`` tree is the only faithful before-state for an
+        # existing skill; ``create`` has no snapshot and starts from empty.
+        before_root = snap if snap is not None and snap.is_dir() else None
+        rels: set[str] = set()
+        for root in (before_root, post_dir):
+            if root is None or not root.is_dir():
+                continue
+            rels.update(str(p.relative_to(root)) for p in root.rglob("*") if p.is_file())
+        for rel in sorted(rels):
+            before_path = before_root / rel if before_root is not None else None
+            after_path = post_dir / rel if post_dir is not None else None
+            before = _read_diff_text(before_path) if before_path and before_path.is_file() else None
+            after = _read_diff_text(after_path) if after_path and after_path.is_file() else None
+            if before is None and after is None:
+                continue
+            display_path = after_path if after_path and after_path.is_file() else before_path
+            if display_path is None:
+                continue
+            diff = _diff_one(before, after, display_path)
+            if diff:
+                chunks.append(diff)
+    return "".join(chunks) or None
+
+
 def _skill_manage_batch(operations, default_name: str | None = None, task_id: str | None = None,
                         session_id: str | None = None) -> str:
     """Apply operations atomically: every touched skill is snapshotted first and any
@@ -264,6 +334,7 @@ def _skill_manage_batch(operations, default_name: str | None = None, task_id: st
         # Single-op path with the gate bypassed (the batch already cleared/staged it).
         results = []
         rollback_failed = False
+        batch_diff = None
         token = _smt._skill_gate_bypass.set(True)
         try:
             for i, op in enumerate(operations):
@@ -292,6 +363,7 @@ def _skill_manage_batch(operations, default_name: str | None = None, task_id: st
                 # compact success row otherwise hides them and the model never sees a finding.
                 entry.update({k: parsed[k] for k in _ADVISORY_KEYS if parsed.get(k) is not None})
                 results.append(entry)
+            batch_diff = _skill_batch_diff(snapshots, _smt._find_skill)
         finally:
             _smt._skill_gate_bypass.reset(token)
             if rollback_failed:
@@ -303,6 +375,7 @@ def _skill_manage_batch(operations, default_name: str | None = None, task_id: st
     # stray non-UTF-8 bytes. Pinning UTF-8 with replacement keeps skill_view deterministic across platforms
     # — falling back to the machine locale (cp1252/GBK) would make the same skill render differently per
     # host (see PR #51701).
-    return json.dumps(
-        {"success": True, "operations_applied": len(results), "results": results},
-        ensure_ascii=False)
+    payload = {"success": True, "operations_applied": len(results), "results": results}
+    if batch_diff:
+        payload["diff"] = batch_diff
+    return json.dumps(payload, ensure_ascii=False)

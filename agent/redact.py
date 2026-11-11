@@ -77,6 +77,66 @@ def clear_vault_redaction_values() -> None:
         _VAULT_REDACTION_VALUES.pop(_vault_scope(), None)
 
 
+_VAULT_REDACTION_MARKER = "«redacted-vault-secret»"
+
+# Separators that continue a NUMBER when a digit sits on their other side: ``2026-11-11``,
+# ``192.0.2.200``, ``1.11.0``, ``11:00:00``. A digit-only secret is indistinguishable from a
+# number, so it is masked only where it is neither glued to a digit nor part of such a chain.
+_NUMBER_CHAIN_SEPARATORS = frozenset("-.:/")
+
+
+def _vault_occurrence_is_standalone(text: str, start: int, value: str) -> bool:
+    """True when ``value`` at ``text[start:]`` is a token of its own, not a slice of another one.
+
+    A word character on either side continues the token whenever the value's own edge is a word
+    character (``170`` inside ``SKU-170-A1``/``1170`` is part of another number; ``2026-11-11``
+    is a date chain), while a value that opens or closes on punctuation (``!Secr3t!``) collides
+    with nothing. A digit-only value additionally has to escape the number chains above, so a
+    short code never rewrites a date, an IP or a version.
+    """
+    end = start + len(value)
+    digits_only = value.isdigit()
+    for edge, neighbour_at, beyond_step in (
+        (value[0], start - 1, -1),
+        (value[-1], end, 1),
+    ):
+        if not 0 <= neighbour_at < len(text):
+            continue  # the text starts/ends here: the value is a whole token
+        if not edge.isalnum():
+            continue  # a punctuation-edged value cannot merge with its neighbour
+        neighbour = text[neighbour_at]
+        if neighbour.isalnum():
+            return False
+        beyond = neighbour_at + beyond_step
+        if (digits_only and neighbour in _NUMBER_CHAIN_SEPARATORS
+                and 0 <= beyond < len(text) and text[beyond].isdigit()):
+            return False
+    return True
+
+
+def _sub_standalone_vault_value(text: str, value: str) -> str:
+    """Replace every standalone occurrence of ``value`` in ``text``.
+
+    A plain ``str.replace`` rewrote digits a short registered value merely appeared in: a six-digit
+    one-time code or a three-digit CVC turned a report's dates, counts and IPs into
+    ``2026-«redacted-vault-secret»…``. The value is only a leak where it stands alone.
+    """
+    value_len = len(value)
+    out: list[str] = []
+    copied = 0
+    found = text.find(value)
+    while found >= 0:
+        if _vault_occurrence_is_standalone(text, found, value):
+            out.append(text[copied:found])
+            out.append(_VAULT_REDACTION_MARKER)
+            copied = found + value_len
+        found = text.find(value, found + value_len)
+    if not out:
+        return text
+    out.append(text[copied:])
+    return "".join(out)
+
+
 def redact_registered_vault_values(text: str) -> str:
     """Exact-substring scrub of every vault secret value registered for the current profile."""
     if not isinstance(text, str) or not text:
@@ -86,7 +146,7 @@ def redact_registered_vault_values(text: str) -> str:
         values = sorted(bucket, key=len, reverse=True) if bucket else ()  # longest first: a substring never shadows its superstring
     for value in values:
         if value in text:
-            text = text.replace(value, "«redacted-vault-secret»")
+            text = _sub_standalone_vault_value(text, value)
     return text
 
 # Sensitive query-string param names (case-insensitive): opaque tokens / OAuth

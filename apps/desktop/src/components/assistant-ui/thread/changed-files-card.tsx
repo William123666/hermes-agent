@@ -3,7 +3,7 @@ import { type FC, useMemo } from 'react'
 
 import { useComposerScope } from '@/app/chat/composer/scope'
 import { useSessionView } from '@/app/chat/session-view'
-import { deriveChangedFiles } from '@/components/assistant-ui/thread/changed-files'
+import { deriveRecordedChanges } from '@/components/assistant-ui/thread/changed-files'
 import { WIDGET_SHELL_CLASS } from '@/components/chat/widget-shell'
 import { DiffCount } from '@/components/ui/diff-count'
 import { FadeScroll } from '@/components/ui/fade-scroll'
@@ -12,7 +12,7 @@ import { Tip } from '@/components/ui/tooltip'
 import { useI18n } from '@/i18n'
 import { displayPath } from '@/lib/display-path'
 import { cn } from '@/lib/utils'
-import { openReviewForPath, revealReview } from '@/store/review'
+import { openRecordedReview } from '@/store/review'
 
 // ~5 rows. A turn that rewrites twenty files should still read as one card in
 // the transcript, not a wall the user has to scroll past to reach the composer.
@@ -21,7 +21,7 @@ const MAX_ROWS_HEIGHT = '9.375rem'
 /**
  * Cursor-style "N files changed" summary closing out the newest assistant turn:
  * one row per file it edited with that file's +/-, and a Review action opening
- * the diff pane (⌘G). A row click opens that file's diff directly.
+ * the recorded edits. A row click opens that file's recorded diffs directly.
  *
  * Wears the shared `WIDGET_SHELL_CLASS` so it reads as the same panel as the
  * transcript's other inline widgets rather than inventing its own chrome.
@@ -29,7 +29,7 @@ const MAX_ROWS_HEIGHT = '9.375rem'
 export const ChangedFilesCard: FC<{ parts: readonly unknown[] }> = ({ parts }) => {
   const { t } = useI18n()
   const copy = t.assistant.thread
-  const files = useMemo(() => deriveChangedFiles(parts), [parts])
+  const files = useMemo(() => deriveRecordedChanges(parts), [parts])
   // Review THIS surface's repo: a tile transcript pins the pane to the tile's
   // worktree; the primary passes null (follow the active session, as before).
   const view = useSessionView()
@@ -50,7 +50,7 @@ export const ChangedFilesCard: FC<{ parts: readonly unknown[] }> = ({ parts }) =
         <span className="min-w-0 flex-1 truncate text-(--ui-text-primary)">{copy.filesChanged(files.length)}</span>
         <button
           className="shrink-0 cursor-pointer text-(--ui-text-tertiary) transition-colors hover:text-(--ui-text-primary)"
-          onClick={() => revealReview(scopeCwd, composerScope.target)}
+          onClick={() => openRecordedReview(files, scopeCwd, composerScope.target)}
           type="button"
         >
           {copy.reviewChanges}
@@ -61,7 +61,7 @@ export const ChangedFilesCard: FC<{ parts: readonly unknown[] }> = ({ parts }) =
           <Tip key={file.path} label={displayPath(file.path)}>
             <button
               className="row-hover flex shrink-0 items-center gap-2 rounded-md px-1.5 py-1 text-left"
-              onClick={() => void openReviewForPath(file.path, scopeCwd, composerScope.target)}
+              onClick={() => openRecordedReview([file], scopeCwd, composerScope.target)}
               type="button"
             >
               <FileTypeIcon className="shrink-0 text-(--ui-text-tertiary)" path={file.path} size="0.875rem" />

@@ -25,6 +25,7 @@ import { SETTINGS_ROUTE } from '@/app/routes'
 import { useBillingApi } from '@/app/settings/billing/api'
 import { dispatchedTo } from '@/components/assistant-ui/thread/agent-delivery'
 import { ChangedFilesCard } from '@/components/assistant-ui/thread/changed-files-card'
+import { turnPartsForMessage } from '@/components/assistant-ui/thread/changed-files'
 import {
   contentHasVisibleText,
   messageContentText,
@@ -508,11 +509,15 @@ const AssistantPreviewEmbeds: FC = () => {
  * retires it — the working tree it describes is already history by then.
  */
 const SettledChangedFiles: FC = () => {
-  const settledParts = useAuiState(s => {
-    const isLastMessage = s.thread.messages[s.thread.messages.length - 1]?.id === s.message.id
+  const messageId = useAuiState(s => s.message.id)
+  const messages = useAuiState(s => s.thread.messages)
+  const isRunning = useAuiState(s => s.message.status?.type === 'running')
+  const isLastMessage = messages[messages.length - 1]?.id === messageId
 
-    return s.message.status?.type === 'running' || !isLastMessage ? EMPTY_PARTS : s.message.parts
-  })
+  const settledParts = useMemo(
+    () => (isRunning || !isLastMessage ? EMPTY_PARTS : turnPartsForMessage(messages, messageId)),
+    [isLastMessage, isRunning, messageId, messages]
+  )
 
   return <ChangedFilesCard parts={settledParts} />
 }

@@ -1468,8 +1468,10 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin, 
     def resolve_resume_session_id(self, session_id: str) -> str:
         """Redirect a resume target to the descendant holding the messages: follow the compression chain to
         the live tip (lineage-aware, so delegate/branch children never hijack it), then walk
-        ``parent_session_id`` forward to the DEEPEST node with messages (a continuation may hold newer
-        turns), skipping branch/delegate/reset/tool children. Unchanged when nothing has messages; depth cap 32.
+        ``parent_session_id`` forward through COMPRESSION continuations to the DEEPEST node with messages
+        (a continuation may hold newer turns), skipping branch/delegate/reset/tool children. An unended
+        parent has no continuation: its children are separate delegate/branch/subagent conversations.
+        Unchanged when nothing has messages; depth cap 32.
 
         Context compression ends the current session and forks a new child session (linked via
         ``parent_session_id``). The flush cursor is reset, so the child is where new messages actually land
@@ -1478,6 +1480,7 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin, 
         """
         if not session_id:
             return session_id
+        original = session_id
         try:
             session_id = self.get_compression_tip(session_id) or session_id
         except Exception:
@@ -1491,20 +1494,26 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin, 
                     if conn.execute("SELECT 1 FROM messages WHERE session_id = ? LIMIT 1", (current,)).fetchone() is not None:
                         best = current
                     child_row = conn.execute(
-                        "SELECT id FROM sessions AS child WHERE child.parent_session_id = ? "
-                        f"  AND {_sql_json_extract('child.model_config', '$._branched_from')} IS NULL "
-                        f"  AND {_sql_json_extract('child.model_config', '$._delegate_from')} IS NULL "
-                        f"  AND {_sql_json_extract('child.model_config', '$._reset_from')} IS NULL "
+                        "SELECT child.id FROM sessions parent "
+                        "JOIN sessions child ON child.parent_session_id = parent.id "
+                        "WHERE parent.id = ? "
+                        # Only a compression-ended parent has continuations. An
+                        # unended parent's children are delegate/branch/subagent
+                        # runs and separate conversations, never its transcript.
+                        "  AND parent.end_reason = 'compression' "
+                        f"  AND COALESCE({_sql_json_extract('child.model_config', '$._branched_from')}, '') != parent.id "
+                        f"  AND COALESCE({_sql_json_extract('child.model_config', '$._delegate_from')}, '') != parent.id "
+                        f"  AND COALESCE({_sql_json_extract('child.model_config', '$._reset_from')}, '') != parent.id "
                         f"  AND NOT {_legacy_reset_child_sql('child', _RESET_END_REASONS_SQL)} "
                         "  AND COALESCE(child.source, '') != 'tool' "
                         "ORDER BY child.started_at DESC, child.id DESC LIMIT 1", (current,)).fetchone()
                 except Exception:
-                    return session_id
+                    return original
                 if child_row is None or not child_row["id"] or child_row["id"] in seen:
                     break
                 current = child_row["id"]
                 seen.add(current)
-            return best if best is not None else session_id
+            return best if best is not None else original
 
     def _fetch_conversation_rows(self, session_ids: list[str], active_clause: str, *, with_session_id: bool,
                                  with_compacted: bool = False):
